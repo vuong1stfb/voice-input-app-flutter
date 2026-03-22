@@ -86,7 +86,7 @@ class _AppSettings {
   static const defaults = _AppSettings(
     originalHotkey: 'F9',
     translationHotkey: 'F10',
-    pasteViaClipboard: true,
+    pasteViaClipboard: false,
     launchToTray: true,
     tokenEndpoint:
         'https://soniox-proxy-ud00.onrender.com/api/soniox/speech-to-text',
@@ -129,12 +129,6 @@ class _PlatformBridge {
   }
 
   Future<void> pasteText(String text, {required bool useClipboard}) async {
-    if (useClipboard) {
-      await Clipboard.setData(ClipboardData(text: text));
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      await _channel.invokeMethod<void>('pasteClipboardShortcut');
-      return;
-    }
     await _channel.invokeMethod<void>('typeText', text);
   }
 }
@@ -528,10 +522,10 @@ class _SettingsPageState extends State<SettingsPage>
       );
       await _platformBridge.pasteText(
         result.text,
-        useClipboard: _settings.pasteViaClipboard,
+        useClipboard: false,
       );
       await _setStatus(
-        'Pasted ${result.mode == TranscriptMode.translation ? 'translation' : 'original'} transcript (${_settings.pasteViaClipboard ? 'clipboard' : 'typing'}).',
+        'Typed ${result.mode == TranscriptMode.translation ? 'translation' : 'original'} transcript directly.',
       );
     } catch (error) {
       await _appendLog('dart:stop:error:$error');
@@ -688,10 +682,8 @@ class _SettingsPageState extends State<SettingsPage>
                   ),
                   _StatCard(
                     title: 'Injection',
-                    value: _settings.pasteViaClipboard
-                        ? 'Clipboard + Ctrl+V'
-                        : 'Direct typing',
-                    note: 'Text is sent to the currently focused app.',
+                    value: 'Direct typing',
+                    note: 'Text is typed directly into the currently focused app.',
                   ),
                   _StatCard(
                     title: 'Audio',
@@ -853,21 +845,15 @@ class _SettingsPageState extends State<SettingsPage>
               _SectionCard(
                 title: 'Behavior',
                 subtitle:
-                    'Clipboard paste tends to behave best across apps. Direct typing is available as a fallback.',
+                    'This build avoids clipboard usage so transcripts do not enter clipboard history.',
                 child: Column(
                   children: [
-                    SwitchListTile.adaptive(
+                    ListTile(
                       contentPadding: EdgeInsets.zero,
-                      value: _settings.pasteViaClipboard,
-                      title: const Text('Paste full text via clipboard'),
+                      title: const Text('Direct typing only'),
                       subtitle: const Text(
-                        'When disabled, the Windows runner types the transcript directly using SendInput.',
+                        'The app now sends text directly with native typing and does not use the clipboard.',
                       ),
-                      onChanged: (value) async {
-                        await _updateSettings(
-                          _settings.copyWith(pasteViaClipboard: value),
-                        );
-                      },
                     ),
                     const Divider(),
                     SwitchListTile.adaptive(
