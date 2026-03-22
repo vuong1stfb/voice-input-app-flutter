@@ -1,0 +1,6 @@
+.gitnexus/
+.dart_tool/
+build/
+flutter_app.log
+soniox_debug.log
+windows_runner.log
