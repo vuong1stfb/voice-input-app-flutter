@@ -4,3 +4,17 @@ build/
 flutter_app.log
 soniox_debug.log
 windows_runner.log
+.idea/
+android/
+ios/
+linux/
+macos/
+web/
+test/
+windows/flutter/
+windows/CMakeLists.txt
+windows/.gitignore
+windows/runner/resources/
+input_app_flutter.iml
+.metadata
+.flutter-plugins-dependencies
