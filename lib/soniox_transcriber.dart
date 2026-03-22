@@ -7,6 +7,8 @@ import 'package:record/record.dart';
 
 enum TranscriptMode { original, translation }
 
+enum SonioxWsState { disconnected, connecting, ready, reconnecting }
+
 class SonioxSettings {
   const SonioxSettings({
     required this.tokenEndpoint,
@@ -43,6 +45,7 @@ class SonioxTranscriber {
   static const int _channels = 1;
   static const int _timesliceMs = 500;
   static const int _finalizeSilenceMs = 200;
+  static const Duration _transportPingInterval = Duration(seconds: 20);
   static const Duration _segmentFinalTimeout = Duration(seconds: 5);
 
   final AudioRecorder _recorder = AudioRecorder();
@@ -81,16 +84,19 @@ class SonioxTranscriber {
   bool _closingSocket = false;
   bool _recorderReady = false;
   SonioxSettings? _lastRequestedSettings;
+  SonioxWsState _wsState = SonioxWsState.disconnected;
   void Function({
     required String originalAccumulated,
     required String translationAccumulated,
     required String originalProvisional,
     required String translationProvisional,
   })? onTranscriptProgress;
+  void Function(SonioxWsState state)? onWsStateChanged;
 
   bool get isRecording => _activeMode != null;
   TranscriptMode? get activeMode => _activeMode;
   bool get isPreparing => _isPreparing;
+  SonioxWsState get wsState => _wsState;
 
   Future<void> _appendLog(String message) async {
     await _logFile.writeAsString('$message\n', mode: FileMode.append, flush: true);
@@ -176,6 +182,16 @@ class SonioxTranscriber {
     _stopReconnect();
     await _recorder.dispose();
     await _closeSocket();
+  }
+
+  Future<void> resetConnection({
+    required SonioxSettings settings,
+    required Future<void> Function(String status) onStatus,
+  }) async {
+    _lastRequestedSettings = settings;
+    await _appendLog('soniox:manual_reset_requested');
+    await _closeSocket();
+    await warmUp(settings: settings, onStatus: onStatus);
   }
 
   void _handleSocketMessage(dynamic raw) {
@@ -347,6 +363,7 @@ class SonioxTranscriber {
     }
 
     _isPreparing = true;
+    _setWsState(SonioxWsState.connecting);
     _stopReconnect();
     await _closeSocket();
 
@@ -355,6 +372,7 @@ class SonioxTranscriber {
 
     await onStatus('Connecting to Soniox...');
     final socket = await WebSocket.connect(settings.websocketEndpoint);
+    socket.pingInterval = _transportPingInterval;
     _websocket = socket;
     _preparedSettings = settings;
 
@@ -407,12 +425,13 @@ class SonioxTranscriber {
     );
     unawaited(
       _appendLog(
-        'soniox:prepared:source_hint=${settings.sourceLanguageHint}:target=${settings.targetLanguage}:sampleRate=${settings.sampleRate}:translation_enabled=true',
+        'soniox:prepared:source_hint=${settings.sourceLanguageHint}:target=${settings.targetLanguage}:sampleRate=${settings.sampleRate}:translation_enabled=true:transport_ping_sec=${_transportPingInterval.inSeconds}',
       ),
     );
 
     _isPreparing = false;
     _startKeepAlive();
+    _setWsState(SonioxWsState.ready);
     await onStatus('Soniox session ready.');
   }
 
@@ -726,6 +745,7 @@ class SonioxTranscriber {
     _keepAliveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (_websocket != null && !isRecording && !_segmentActive && !_commitRequested) {
         _websocket!.add(jsonEncode({'type': 'keepalive'}));
+        unawaited(_appendLog('soniox:keepalive_sent'));
       }
     });
   }
@@ -733,6 +753,14 @@ class SonioxTranscriber {
   void _stopKeepAlive() {
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
+  }
+
+  void _setWsState(SonioxWsState state) {
+    if (_wsState == state) {
+      return;
+    }
+    _wsState = state;
+    onWsStateChanged?.call(state);
   }
 
   void _scheduleReconnect() {
@@ -743,6 +771,7 @@ class SonioxTranscriber {
     if (settings == null) {
       return;
     }
+    _setWsState(SonioxWsState.reconnecting);
     _reconnectTimer = Timer(const Duration(seconds: 2), () async {
       _reconnectTimer = null;
       if (_isDisposed || _websocket != null) {
@@ -756,6 +785,7 @@ class SonioxTranscriber {
         );
       } catch (error) {
         await _appendLog('soniox:reconnect_failed:$error');
+        _setWsState(SonioxWsState.disconnected);
         _scheduleReconnect();
       }
     });
@@ -774,6 +804,7 @@ class SonioxTranscriber {
     _websocket = null;
     _preparedSettings = null;
     _isPreparing = false;
+    _setWsState(SonioxWsState.disconnected);
     _scheduleReconnect();
   }
 
@@ -784,6 +815,7 @@ class SonioxTranscriber {
     _websocket = null;
     _preparedSettings = null;
     _isPreparing = false;
+    _setWsState(SonioxWsState.disconnected);
     if (socket == null) {
       return;
     }

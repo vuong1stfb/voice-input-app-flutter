@@ -2,11 +2,15 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app/app_controller.dart';
+import 'app/app_settings.dart';
+import 'app/app_state.dart';
+import 'app/platform_bridge.dart';
+import 'app/settings_widgets.dart';
+import 'app/app_theme.dart';
 import 'soniox_transcriber.dart';
 
 Future<void> main() async {
@@ -22,114 +26,10 @@ class InputAppDesktop extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Input App',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF135D66),
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF4F1EA),
-        useMaterial3: true,
-      ),
+      title: 'Voice Input',
+      theme: buildAppTheme(),
       home: const SettingsPage(),
     );
-  }
-}
-
-class _AppSettings {
-  const _AppSettings({
-    required this.originalHotkey,
-    required this.translationHotkey,
-    required this.pasteViaClipboard,
-    required this.launchToTray,
-    required this.tokenEndpoint,
-    required this.websocketEndpoint,
-    required this.targetLanguage,
-    required this.sourceLanguageHint,
-    required this.sampleRate,
-  });
-
-  final String originalHotkey;
-  final String translationHotkey;
-  final bool pasteViaClipboard;
-  final bool launchToTray;
-  final String tokenEndpoint;
-  final String websocketEndpoint;
-  final String targetLanguage;
-  final String sourceLanguageHint;
-  final int sampleRate;
-
-  _AppSettings copyWith({
-    String? originalHotkey,
-    String? translationHotkey,
-    bool? pasteViaClipboard,
-    bool? launchToTray,
-    String? tokenEndpoint,
-    String? websocketEndpoint,
-    String? targetLanguage,
-    String? sourceLanguageHint,
-    int? sampleRate,
-  }) {
-    return _AppSettings(
-      originalHotkey: originalHotkey ?? this.originalHotkey,
-      translationHotkey: translationHotkey ?? this.translationHotkey,
-      pasteViaClipboard: pasteViaClipboard ?? this.pasteViaClipboard,
-      launchToTray: launchToTray ?? this.launchToTray,
-      tokenEndpoint: tokenEndpoint ?? this.tokenEndpoint,
-      websocketEndpoint: websocketEndpoint ?? this.websocketEndpoint,
-      targetLanguage: targetLanguage ?? this.targetLanguage,
-      sourceLanguageHint: sourceLanguageHint ?? this.sourceLanguageHint,
-      sampleRate: sampleRate ?? this.sampleRate,
-    );
-  }
-
-  static const defaults = _AppSettings(
-    originalHotkey: 'F9',
-    translationHotkey: 'F10',
-    pasteViaClipboard: false,
-    launchToTray: true,
-    tokenEndpoint:
-        'https://soniox-proxy-ud00.onrender.com/api/soniox/speech-to-text',
-    websocketEndpoint: 'wss://stt-rt.soniox.com/transcribe-websocket',
-    targetLanguage: 'en',
-    sourceLanguageHint: 'vi',
-    sampleRate: 48000,
-  );
-}
-
-class _PlatformBridge {
-  _PlatformBridge();
-
-  static const _channel = MethodChannel('input_app/platform');
-
-  Future<void> Function(String kind, String action)? onHotkeyEvent;
-
-  Future<void> initialize() async {
-    _channel.setMethodCallHandler((call) async {
-      if (call.method != 'onHotkeyEvent') {
-        return;
-      }
-      final payload = Map<String, dynamic>.from(call.arguments as Map);
-      final kind = payload['kind'] as String?;
-      final action = payload['action'] as String?;
-      if (kind != null && action != null && onHotkeyEvent != null) {
-        await onHotkeyEvent!(kind, action);
-      }
-    });
-  }
-
-  Future<void> configureHotkeys({
-    required String originalHotkey,
-    required String translationHotkey,
-  }) async {
-    await _channel.invokeMethod<void>('configureHotkeys', {
-      'original': originalHotkey,
-      'translation': translationHotkey,
-    });
-  }
-
-  Future<void> pasteText(String text, {required bool useClipboard}) async {
-    await _channel.invokeMethod<void>('typeText', text);
   }
 }
 
@@ -142,15 +42,6 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage>
     with WindowListener, TrayListener {
-  static const _originalHotkeyKey = 'original_hotkey';
-  static const _translationHotkeyKey = 'translation_hotkey';
-  static const _pasteViaClipboardKey = 'paste_via_clipboard';
-  static const _launchToTrayKey = 'launch_to_tray';
-  static const _tokenEndpointKey = 'token_endpoint';
-  static const _websocketEndpointKey = 'websocket_endpoint';
-  static const _targetLanguageKey = 'target_language';
-  static const _sourceLanguageHintKey = 'source_language_hint';
-  static const _sampleRateKey = 'sample_rate';
   static const _hotkeyChoices = <String>[
     'F1',
     'F2',
@@ -169,32 +60,19 @@ class _SettingsPageState extends State<SettingsPage>
     'Tab',
   ];
 
-  final _platformBridge = _PlatformBridge();
-  final _transcriber = SonioxTranscriber();
+  final _controller = AppController(
+    platformBridge: PlatformBridge(),
+    transcriber: SonioxTranscriber(),
+  );
   final _tokenEndpointController = TextEditingController();
   final _websocketEndpointController = TextEditingController();
   final _targetLanguageController = TextEditingController();
   final _sourceLanguageController = TextEditingController();
 
-  late final SharedPreferences _prefs;
-  _AppSettings _settings = _AppSettings.defaults;
-  bool _isReady = false;
   bool _isQuitting = false;
-  bool _isBusy = false;
-  TranscriptMode? _pressedMode;
-  bool _pendingRelease = false;
-  String _status = 'Booting Windows shell...';
-  String _lastOriginal = '';
-  String _lastTranslation = '';
-  String _sessionOriginalAccumulated = '';
-  String _sessionTranslationAccumulated = '';
-  String _sessionOriginalProvisional = '';
-  String _sessionTranslationProvisional = '';
 
-  Future<void> _appendLog(String message) async {
-    final file = File('C:/dev/input_app_flutter/flutter_app.log');
-    await file.writeAsString('$message\n', mode: FileMode.append, flush: true);
-  }
+  AppSettings get _settings => _controller.settings;
+  AppViewState get _viewState => _controller.state;
 
   @override
   void initState() {
@@ -210,116 +88,26 @@ class _SettingsPageState extends State<SettingsPage>
     _websocketEndpointController.dispose();
     _targetLanguageController.dispose();
     _sourceLanguageController.dispose();
-    unawaited(_transcriber.dispose());
+    unawaited(_controller.disposeAsync());
     trayManager.removeListener(this);
     windowManager.removeListener(this);
     super.dispose();
   }
 
   Future<void> _bootstrap() async {
-    _prefs = await SharedPreferences.getInstance();
-    _loadSettings();
+    await _initTray();
+    await _controller.preloadSettings();
+    _syncControllersFromSettings();
+    await _configureWindow();
+    await _controller.bootstrap();
+  }
+
+  void _syncControllersFromSettings() {
     _tokenEndpointController.text = _settings.tokenEndpoint;
     _websocketEndpointController.text = _settings.websocketEndpoint;
     _targetLanguageController.text = _settings.targetLanguage;
     _sourceLanguageController.text = _settings.sourceLanguageHint;
-
-    await _platformBridge.initialize();
-    _platformBridge.onHotkeyEvent = _handleHotkeyEvent;
-    _transcriber.onTranscriptProgress = ({
-      required String originalAccumulated,
-      required String translationAccumulated,
-      required String originalProvisional,
-      required String translationProvisional,
-    }) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _sessionOriginalAccumulated = originalAccumulated;
-        _sessionTranslationAccumulated = translationAccumulated;
-        _sessionOriginalProvisional = originalProvisional;
-        _sessionTranslationProvisional = translationProvisional;
-      });
-    };
-    await _appendLog('dart:bootstrap:initialized');
-
-    await _initTray();
-    await _configureWindow();
-    await _applyHotkeys();
-    await _warmUpSession();
-
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _isReady = true;
-      _status =
-          'Ready. Hold ${_settings.originalHotkey} for original or ${_settings.translationHotkey} for translation, then release to transcribe.';
-    });
-    await _appendLog('dart:bootstrap:ready');
   }
-
-  void _loadSettings() {
-    _settings = _AppSettings(
-      originalHotkey:
-          _prefs.getString(_originalHotkeyKey) ??
-          _AppSettings.defaults.originalHotkey,
-      translationHotkey:
-          _prefs.getString(_translationHotkeyKey) ??
-          _AppSettings.defaults.translationHotkey,
-      pasteViaClipboard:
-          _prefs.getBool(_pasteViaClipboardKey) ??
-          _AppSettings.defaults.pasteViaClipboard,
-      launchToTray:
-          _prefs.getBool(_launchToTrayKey) ??
-          _AppSettings.defaults.launchToTray,
-      tokenEndpoint:
-          _prefs.getString(_tokenEndpointKey) ??
-          _AppSettings.defaults.tokenEndpoint,
-      websocketEndpoint:
-          _prefs.getString(_websocketEndpointKey) ??
-          _AppSettings.defaults.websocketEndpoint,
-      targetLanguage:
-          _prefs.getString(_targetLanguageKey) ??
-          _AppSettings.defaults.targetLanguage,
-      sourceLanguageHint:
-          _prefs.getString(_sourceLanguageHintKey) ??
-          _AppSettings.defaults.sourceLanguageHint,
-      sampleRate:
-          _prefs.getInt(_sampleRateKey) ?? _AppSettings.defaults.sampleRate,
-    );
-  }
-
-  Future<void> _saveSettings(_AppSettings settings) async {
-    await _prefs.setString(_originalHotkeyKey, settings.originalHotkey);
-    await _prefs.setString(_translationHotkeyKey, settings.translationHotkey);
-    await _prefs.setBool(_pasteViaClipboardKey, settings.pasteViaClipboard);
-    await _prefs.setBool(_launchToTrayKey, settings.launchToTray);
-    await _prefs.setString(_tokenEndpointKey, settings.tokenEndpoint);
-    await _prefs.setString(_websocketEndpointKey, settings.websocketEndpoint);
-    await _prefs.setString(_targetLanguageKey, settings.targetLanguage);
-    await _prefs.setString(
-      _sourceLanguageHintKey,
-      settings.sourceLanguageHint,
-    );
-    await _prefs.setInt(_sampleRateKey, settings.sampleRate);
-  }
-
-  Future<void> _updateSettings(_AppSettings nextSettings) async {
-    setState(() {
-      _settings = nextSettings;
-    });
-    await _saveSettings(nextSettings);
-  }
-
-  SonioxSettings get _sonioxSettings => SonioxSettings(
-    tokenEndpoint: _settings.tokenEndpoint,
-    websocketEndpoint: _settings.websocketEndpoint,
-    targetLanguage: _settings.targetLanguage,
-    sourceLanguageHint: _settings.sourceLanguageHint,
-    sampleRate: _settings.sampleRate,
-  );
 
   Future<void> _initTray() async {
     if (!Platform.isWindows) {
@@ -391,161 +179,12 @@ class _SettingsPageState extends State<SettingsPage>
     if (Platform.isWindows) {
       await trayManager.destroy();
     }
-    await _transcriber.dispose();
+    await _controller.disposeAsync();
     await windowManager.destroy();
   }
 
-  Future<void> _setStatus(String status) async {
-    if (!mounted) {
-      return;
-    }
-    await _appendLog('dart:status:$status');
-    setState(() {
-      _status = status;
-    });
-  }
-
-  Future<void> _applyHotkeys() async {
-    try {
-      await _platformBridge.configureHotkeys(
-        originalHotkey: _settings.originalHotkey,
-        translationHotkey: _settings.translationHotkey,
-      );
-      await _setStatus(
-        'Hotkeys active: ${_settings.originalHotkey} / ${_settings.translationHotkey}',
-      );
-    } on PlatformException catch (error) {
-      await _setStatus(
-        error.message ?? 'Failed to register global hotkeys on Windows.',
-      );
-    }
-  }
-
-  Future<void> _warmUpSession() async {
-    try {
-      await _transcriber.warmUp(
-        settings: _sonioxSettings,
-        onStatus: _setStatus,
-      );
-      await _appendLog('dart:warmup:ok');
-    } catch (error) {
-      await _appendLog('dart:warmup:error:$error');
-      await _setStatus('Warm-up failed: $error');
-    }
-  }
-
-  Future<void> _handleHotkeyEvent(String kind, String action) async {
-    await _appendLog('dart:event:$kind:$action');
-    final mode = kind == 'translation'
-        ? TranscriptMode.translation
-        : TranscriptMode.original;
-
-    if (_isBusy) {
-      if (action == 'up' && _pressedMode == mode) {
-        _pendingRelease = true;
-        await _appendLog('dart:event:queued_release_while_busy');
-      } else {
-        await _appendLog('dart:event:ignored_busy');
-      }
-      return;
-    }
-
-    if (action == 'down') {
-      if (_transcriber.isRecording) {
-        await _appendLog('dart:event:ignored_already_recording');
-        return;
-      }
-      _pressedMode = mode;
-      _pendingRelease = false;
-      await _startRecording(mode);
-      return;
-    }
-
-    if (action == 'up' &&
-        _transcriber.isRecording &&
-        _pressedMode == mode &&
-        _transcriber.activeMode == mode) {
-      await _stopRecording();
-      _pressedMode = null;
-    } else if (action == 'up') {
-      await _appendLog('dart:event:up_ignored_state_mismatch');
-    }
-  }
-
-  Future<void> _startRecording(TranscriptMode mode) async {
-    await _appendLog('dart:start:${mode.name}');
-    _isBusy = true;
-    try {
-      await _transcriber.start(
-        mode: mode,
-        settings: _sonioxSettings,
-        onStatus: _setStatus,
-      );
-      await _setStatus(
-        'Recording ${mode == TranscriptMode.translation ? 'translation' : 'original'} audio. Release the hotkey to finalize.',
-      );
-      await _appendLog('dart:start:ok:${mode.name}');
-    } catch (error) {
-      await _appendLog('dart:start:error:$error');
-      await _setStatus('Failed to start recording: $error');
-    } finally {
-      _isBusy = false;
-      if (mounted) {
-        setState(() {});
-      }
-    }
-
-    if (_pendingRelease &&
-        _transcriber.isRecording &&
-        _transcriber.activeMode == mode) {
-      await _appendLog('dart:start:consuming_pending_release:${mode.name}');
-      _pendingRelease = false;
-      await _stopRecording();
-    }
-  }
-
-  Future<void> _stopRecording() async {
-    await _appendLog('dart:stop:begin');
-    _isBusy = true;
-    try {
-      final result = await _transcriber.stop(onStatus: _setStatus);
-      if (result == null || result.text.trim().isEmpty) {
-        await _appendLog('dart:stop:no_result');
-        await _setStatus('No transcript returned from Soniox.');
-        return;
-      }
-
-      _lastOriginal = result.originalText;
-      _lastTranslation = result.translationText;
-      await _appendLog(
-        'dart:stop:result:mode=${result.mode.name}:text=${result.text}',
-      );
-      await _platformBridge.pasteText(
-        result.text,
-        useClipboard: false,
-      );
-      await _setStatus(
-        'Typed ${result.mode == TranscriptMode.translation ? 'translation' : 'original'} transcript directly.',
-      );
-    } catch (error) {
-      await _appendLog('dart:stop:error:$error');
-      await _setStatus('Failed to finalize transcript: $error');
-    } finally {
-      _isBusy = false;
-      _pressedMode = null;
-      _pendingRelease = false;
-      if (mounted) {
-        setState(() {});
-      }
-    }
-  }
-
-  Future<void> _toggleManual(TranscriptMode mode) async {
-    if (_transcriber.isRecording) {
-      await _stopRecording();
-      return;
-    }
-    await _startRecording(mode);
+  Future<void> _resetWsWithCurrentConfig() async {
+    await _controller.reconnect();
   }
 
   @override
@@ -592,11 +231,16 @@ class _SettingsPageState extends State<SettingsPage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          child: _isReady ? _buildContent(context) : _buildLoading(context),
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) => Scaffold(
+        body: SafeArea(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: _viewState.isReady
+                ? _buildContent(context)
+                : _buildLoading(context),
+          ),
         ),
       ),
     );
@@ -613,8 +257,10 @@ class _SettingsPageState extends State<SettingsPage>
           ),
           const SizedBox(height: 16),
           Text(
-            _status,
-            style: Theme.of(context).textTheme.titleMedium,
+            _viewState.statusMessage,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: AppColors.mutedInk),
             textAlign: TextAlign.center,
           ),
         ],
@@ -624,8 +270,6 @@ class _SettingsPageState extends State<SettingsPage>
 
   Widget _buildContent(BuildContext context) {
     final theme = Theme.of(context);
-    final isRecording = _transcriber.isRecording;
-    final activeMode = _transcriber.activeMode;
     return SingleChildScrollView(
       key: const ValueKey('content'),
       padding: const EdgeInsets.all(28),
@@ -635,286 +279,484 @@ class _SettingsPageState extends State<SettingsPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Input App',
-                style: theme.textTheme.displaySmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF0F2C2F),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Windows-first voice input shell with native tray, single-instance protection, global hotkeys, Soniox streaming, and text injection into the focused app.',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFF355C5E),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(18),
+              DecoratedBox(
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE7F2EE),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: const Color(0xFFBED3C7)),
-                ),
-                child: Text(
-                  _status,
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: const Color(0xFF204E4B),
-                    fontWeight: FontWeight.w600,
+                  borderRadius: BorderRadius.circular(32),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFFFBF5), Color(0xFFF3EEE5)],
                   ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              Wrap(
-                spacing: 16,
-                runSpacing: 16,
-                children: [
-                  _StatCard(
-                    title: 'Recording',
-                    value: isRecording
-                        ? (activeMode == TranscriptMode.translation
-                              ? 'Translation live'
-                              : 'Original live')
-                        : 'Idle',
-                    note: 'Hold to record, release to finalize.',
-                  ),
-                  _StatCard(
-                    title: 'Injection',
-                    value: 'Direct typing',
-                    note: 'Text is typed directly into the currently focused app.',
-                  ),
-                  _StatCard(
-                    title: 'Audio',
-                    value: '${_settings.sampleRate} Hz PCM16',
-                    note: 'Windows mic stream routed into Soniox WS.',
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              _SectionCard(
-                title: 'Hotkeys',
-                subtitle:
-                    'The native Windows runner listens for key down and key up so the app behaves like classic push-to-talk.',
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _HotkeyDropdown(
-                        label: 'Original',
-                        value: _settings.originalHotkey,
-                        choices: _hotkeyChoices,
-                        onChanged: (value) async {
-                          if (value == null ||
-                              value == _settings.translationHotkey) {
-                            return;
-                          }
-                          await _updateSettings(
-                            _settings.copyWith(originalHotkey: value),
-                          );
-                          await _applyHotkeys();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _HotkeyDropdown(
-                        label: 'Translation',
-                        value: _settings.translationHotkey,
-                        choices: _hotkeyChoices,
-                        onChanged: (value) async {
-                          if (value == null ||
-                              value == _settings.originalHotkey) {
-                            return;
-                          }
-                          await _updateSettings(
-                            _settings.copyWith(translationHotkey: value),
-                          );
-                          await _applyHotkeys();
-                        },
-                      ),
+                  border: Border.all(color: AppColors.border),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 40,
+                      offset: Offset(0, 20),
                     ),
                   ],
                 ),
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final wide = constraints.maxWidth >= 760;
+                      final intro = Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'VOICE INPUT',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              letterSpacing: 2.2,
+                              color: AppColors.mutedInk,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Speak faster.\nStay in flow.',
+                            style: theme.textTheme.displayLarge,
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            'A warm, quiet desktop utility for dropping voice straight into the app you are already using.',
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              color: AppColors.mutedInk,
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              KeycapBadge(label: '${_settings.originalHotkey} Original'),
+                              KeycapBadge(
+                                label:
+                                    '${_settings.translationHotkey} Translate',
+                              ),
+                              const KeycapBadge(label: 'Tray Ready'),
+                            ],
+                          ),
+                        ],
+                      );
+                      final utilityCard = Container(
+                        padding: const EdgeInsets.all(22),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.58),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'How it should feel',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: AppColors.mutedInk,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            _buildUtilityPoint(
+                              context,
+                              title: 'Hold, talk, release',
+                              detail:
+                                  'No mode switcher, no floating mic UI, no paste dance.',
+                            ),
+                            const SizedBox(height: 14),
+                            _buildUtilityPoint(
+                              context,
+                              title: 'Tray-first',
+                              detail:
+                                  'The window is a settings surface. The product lives in the background.',
+                            ),
+                            const SizedBox(height: 14),
+                            _buildUtilityPoint(
+                              context,
+                              title: 'Translation stays core',
+                              detail:
+                                  'Useful for bilingual prompting and fast text entry, but still under one simple promise.',
+                            ),
+                          ],
+                        ),
+                      );
+                      if (!wide) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            intro,
+                            const SizedBox(height: 20),
+                            utilityCard,
+                          ],
+                        );
+                      }
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 7, child: intro),
+                          const SizedBox(width: 20),
+                          Expanded(flex: 5, child: utilityCard),
+                        ],
+                      );
+                    },
+                  ),
+                ),
               ),
-              const SizedBox(height: 16),
-              _SectionCard(
-                title: 'Soniox',
-                subtitle:
-                    'These settings are persisted immediately and used on the next recording session.',
-                child: Column(
-                  children: [
-                    _SettingField(
-                      label: 'Token endpoint',
-                      controller: _tokenEndpointController,
-                      onSubmitted: (value) async {
-                        await _updateSettings(
-                          _settings.copyWith(tokenEndpoint: value.trim()),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    _SettingField(
-                      label: 'WebSocket endpoint',
-                      controller: _websocketEndpointController,
-                      onSubmitted: (value) async {
-                        await _updateSettings(
-                          _settings.copyWith(websocketEndpoint: value.trim()),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
+              const SizedBox(height: 22),
+              StatusBanner(
+                title: _viewState.statusTitle,
+                detail: _viewState.statusDetail,
+                tone: _viewState.statusTone,
+              ),
+              if (!_viewState.onboardingDismissed) ...[
+                const SizedBox(height: 16),
+                InfoCard(
+                  title: 'Start here',
+                  body:
+                      'Focus any text field, hold a shortcut, speak, then release the key. The app keeps running in the tray when you close this window.',
+                  primaryLabel: 'Got it',
+                  onPrimaryPressed: () async {
+                    await _controller.dismissOnboarding();
+                  },
+                ),
+              ],
+              if (_viewState.phase == AppPhase.needsAttention) ...[
+                const SizedBox(height: 16),
+                InfoCard(
+                  title: 'Voice input needs repair',
+                  body:
+                      'If speech is not working, try reconnecting first. You can open Advanced for diagnostics if the problem continues.',
+                  primaryLabel: 'Reconnect now',
+                  onPrimaryPressed: _viewState.isBusy || _controller.isRecording
+                      ? null
+                      : () async {
+                          await _resetWsWithCurrentConfig();
+                        },
+                  secondaryLabel: _viewState.advancedModeEnabled
+                      ? null
+                      : 'Open Advanced',
+                  onSecondaryPressed: _viewState.advancedModeEnabled
+                      ? null
+                      : () async {
+                          await _controller.setAdvancedModeEnabled(true);
+                        },
+                  tone: AppStatusTone.warning,
+                ),
+              ],
+              const SizedBox(height: 24),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final wide = constraints.maxWidth >= 860;
+                  final shortcutsCard = SectionCard(
+                    title: 'Shortcuts',
+                    subtitle: 'Choose the keys you hold while speaking.',
+                    child: Row(
                       children: [
                         Expanded(
-                          child: _SettingField(
-                            label: 'Source language hints',
-                            example: 'Examples: vi or vi,en',
-                            controller: _sourceLanguageController,
-                            onSubmitted: (value) async {
-                              await _updateSettings(
-                                _settings.copyWith(
-                                  sourceLanguageHint: value.trim(),
-                                ),
+                          child: HotkeyDropdown(
+                            label: 'Original',
+                            value: _settings.originalHotkey,
+                            choices: _hotkeyChoices,
+                            onChanged: (value) async {
+                              if (value == null ||
+                                  value == _settings.translationHotkey) {
+                                return;
+                              }
+                              await _controller.updateSettings(
+                                _settings.copyWith(originalHotkey: value),
                               );
+                              await _controller.applyHotkeys();
                             },
                           ),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
-                          child: _SettingField(
-                            label: 'Target language',
-                            controller: _targetLanguageController,
-                            onSubmitted: (value) async {
-                              await _updateSettings(
-                                _settings.copyWith(
-                                  targetLanguage: value.trim(),
-                                ),
+                          child: HotkeyDropdown(
+                            label: 'Translation',
+                            value: _settings.translationHotkey,
+                            choices: _hotkeyChoices,
+                            onChanged: (value) async {
+                              if (value == null ||
+                                  value == _settings.originalHotkey) {
+                                return;
+                              }
+                              await _controller.updateSettings(
+                                _settings.copyWith(translationHotkey: value),
                               );
+                              await _controller.applyHotkeys();
                             },
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: _ReadOnlyField(
-                            label: 'Sample rate',
-                            value: '${_settings.sampleRate}',
                           ),
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  );
+                  final languageCard = SectionCard(
+                    title: 'Voice & Language',
+                    subtitle:
+                        'Original types what you said. Translate types the translated result.',
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SettingField(
+                                label: 'Spoken language hint',
+                                example: 'Examples: vi or vi,en',
+                                controller: _sourceLanguageController,
+                                onSubmitted: (value) async {
+                                  await _controller.updateSettings(
+                                    _settings.copyWith(
+                                      sourceLanguageHint: value.trim(),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: SettingField(
+                                label: 'Translate output language',
+                                controller: _targetLanguageController,
+                                onSubmitted: (value) async {
+                                  await _controller.updateSettings(
+                                    _settings.copyWith(
+                                      targetLanguage: value.trim(),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppColors.panelMuted,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Text(
+                            'Use ${_settings.originalHotkey} for Original and ${_settings.translationHotkey} for Translate.',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: AppColors.mutedInk,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  final generalCard = SectionCard(
+                    title: 'General',
+                    subtitle: 'Keep the app quiet and ready in the background.',
+                    child: Column(
+                      children: [
+                        SwitchListTile.adaptive(
+                          contentPadding: EdgeInsets.zero,
+                          value: _settings.launchToTray,
+                          title: const Text('Open in the tray on startup'),
+                          subtitle: const Text(
+                            'Hide the window at startup and keep the app available from the tray icon.',
+                          ),
+                          onChanged: (value) async {
+                            await _controller.updateSettings(
+                              _settings.copyWith(launchToTray: value),
+                            );
+                            if (value && Platform.isWindows) {
+                              await _hideWindow();
+                            } else {
+                              await _showWindow();
+                            }
+                          },
+                        ),
+                        const Divider(),
+                        const ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text('Closing the window keeps the app running'),
+                          subtitle: Text(
+                            'Use the tray icon to open settings again or quit the app.',
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  final typingCard = SectionCard(
+                    title: 'Typing',
+                    subtitle:
+                        'This release types directly into the currently focused app.',
+                    child: Column(
+                      children: [
+                        const ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text('Direct typing'),
+                          subtitle: Text(
+                            'Your transcript is typed into the app you are using. Clipboard history is not used.',
+                          ),
+                        ),
+                        const Divider(),
+                        const ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text('Best for short and medium text'),
+                          subtitle: Text(
+                            'The first release is optimized for prompts, chat, notes, and repeated text entry.',
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+
+                  if (!wide) {
+                    return Column(
+                      children: [
+                        shortcutsCard,
+                        const SizedBox(height: 16),
+                        languageCard,
+                        const SizedBox(height: 16),
+                        generalCard,
+                        const SizedBox(height: 16),
+                        typingCard,
+                      ],
+                    );
+                  }
+
+                  return Column(
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: shortcutsCard),
+                          const SizedBox(width: 16),
+                          Expanded(child: languageCard),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: generalCard),
+                          const SizedBox(width: 16),
+                          Expanded(child: typingCard),
+                        ],
+                      ),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 16),
-              _SectionCard(
-                title: 'Manual controls',
-                subtitle:
-                    'These buttons mimic the same start/stop lifecycle as the hold-to-talk hotkeys.',
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: _isBusy
-                            ? null
-                            : () => _toggleManual(TranscriptMode.original),
-                        child: Text(
-                          isRecording && activeMode == TranscriptMode.original
-                              ? 'Finalize Original'
-                              : 'Start Original',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.tonal(
-                        onPressed: _isBusy
-                            ? null
-                            : () => _toggleManual(TranscriptMode.translation),
-                        child: Text(
-                          isRecording &&
-                                  activeMode == TranscriptMode.translation
-                              ? 'Finalize Translation'
-                              : 'Start Translation',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              _SectionCard(
-                title: 'Behavior',
-                subtitle:
-                    'This build avoids clipboard usage so transcripts do not enter clipboard history.',
+              AdvancedSection(
+                expanded: _viewState.advancedModeEnabled,
+                onChanged: (value) async {
+                  await _controller.setAdvancedModeEnabled(value);
+                },
                 child: Column(
                   children: [
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Direct typing only'),
-                      subtitle: const Text(
-                        'The app now sends text directly with native typing and does not use the clipboard.',
-                      ),
-                    ),
-                    const Divider(),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      value: _settings.launchToTray,
-                      title: const Text('Launch directly to tray on Windows'),
-                      subtitle: const Text(
-                        'Hide the settings window at startup and keep only the tray icon visible.',
-                      ),
-                      onChanged: (value) async {
-                        await _updateSettings(
-                          _settings.copyWith(launchToTray: value),
-                        );
-                        if (value && Platform.isWindows) {
-                          await _hideWindow();
-                        } else {
-                          await _showWindow();
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              _SectionCard(
-                title: 'Session transcript',
-                subtitle:
-                    'Live accumulated text for the current hold-to-talk session. Provisional tails are shown until Soniox finalizes them.',
-                child: Column(
-                  children: [
-                    _TranscriptBox(
-                      label: 'Original accumulated',
-                      value: _composeSessionDisplay(
-                        accumulated: _sessionOriginalAccumulated,
-                        provisional: _sessionOriginalProvisional,
+                    SectionCard(
+                      title: 'Health',
+                      subtitle:
+                          'Use this only when voice input needs attention.',
+                      child: Column(
+                        children: [
+                          ReadOnlyField(
+                            label: 'Connection',
+                            value: _viewState.wsStateLabel,
+                          ),
+                          const SizedBox(height: 16),
+                          ReadOnlyField(
+                            label: 'Sample rate',
+                            value: '${_settings.sampleRate}',
+                          ),
+                          const SizedBox(height: 16),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: FilledButton.tonalIcon(
+                              onPressed:
+                                  _viewState.isBusy || _controller.isRecording
+                                  ? null
+                                  : _resetWsWithCurrentConfig,
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('Reconnect voice service'),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),
-                    _TranscriptBox(
-                      label: 'Translation accumulated',
-                      value: _composeSessionDisplay(
-                        accumulated: _sessionTranslationAccumulated,
-                        provisional: _sessionTranslationProvisional,
+                    SectionCard(
+                      title: 'Backend',
+                      subtitle:
+                          'Technical configuration for debugging and support.',
+                      child: Column(
+                        children: [
+                          SettingField(
+                            label: 'Token endpoint',
+                            controller: _tokenEndpointController,
+                            onSubmitted: (value) async {
+                              await _controller.updateSettings(
+                                _settings.copyWith(tokenEndpoint: value.trim()),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                          SettingField(
+                            label: 'WebSocket endpoint',
+                            controller: _websocketEndpointController,
+                            onSubmitted: (value) async {
+                              await _controller.updateSettings(
+                                _settings.copyWith(
+                                  websocketEndpoint: value.trim(),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              _SectionCard(
-                title: 'Last transcript',
-                subtitle:
-                    'Useful for debugging the STT layer separately from paste behavior.',
-                child: Column(
-                  children: [
-                    _TranscriptBox(label: 'Original', value: _lastOriginal),
                     const SizedBox(height: 16),
-                    _TranscriptBox(
-                      label: 'Translation',
-                      value: _lastTranslation,
+                    SectionCard(
+                      title: 'Session transcript',
+                      subtitle:
+                          'Live accumulated text for the current hold-to-talk session.',
+                      child: Column(
+                        children: [
+                          TranscriptBox(
+                            label: 'Original accumulated',
+                            value: _composeSessionDisplay(
+                              accumulated:
+                                  _viewState.sessionOriginalAccumulated,
+                              provisional:
+                                  _viewState.sessionOriginalProvisional,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TranscriptBox(
+                            label: 'Translation accumulated',
+                            value: _composeSessionDisplay(
+                              accumulated:
+                                  _viewState.sessionTranslationAccumulated,
+                              provisional:
+                                  _viewState.sessionTranslationProvisional,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SectionCard(
+                      title: 'Last transcript',
+                      subtitle: 'Useful when checking the last successful run.',
+                      child: Column(
+                        children: [
+                          TranscriptBox(
+                            label: 'Original',
+                            value: _viewState.lastOriginal,
+                          ),
+                          const SizedBox(height: 16),
+                          TranscriptBox(
+                            label: 'Translation',
+                            value: _viewState.lastTranslation,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -940,274 +782,45 @@ class _SettingsPageState extends State<SettingsPage>
     }
     return '$finalText\n\n[provisional] $provisionalText';
   }
-}
 
-class _StatCard extends StatelessWidget {
-  const _StatCard({
-    required this.title,
-    required this.value,
-    required this.note,
-  });
-
-  final String title;
-  final String value;
-  final String note;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 300,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 24,
-            offset: Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: const Color(0xFF52796F),
-              letterSpacing: 0.2,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: const Color(0xFF112D32),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            note,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF506568)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({
-    required this.title,
-    required this.subtitle,
-    required this.child,
-  });
-
-  final String title;
-  final String subtitle;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: const Color(0xFFD8E2DC)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: const Color(0xFF12343B),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            subtitle,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: const Color(0xFF5C7778)),
-          ),
-          const SizedBox(height: 20),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _HotkeyDropdown extends StatelessWidget {
-  const _HotkeyDropdown({
-    required this.label,
-    required this.value,
-    required this.choices,
-    required this.onChanged,
-  });
-
-  final String label;
-  final String value;
-  final List<String> choices;
-  final ValueChanged<String?> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
+  Widget _buildUtilityPoint(
+    BuildContext context, {
+    required String title,
+    required String detail,
+  }) {
+    final theme = Theme.of(context);
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 10),
-        DropdownButtonFormField<String>(
-          initialValue: value,
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: const Color(0xFFF7FAF8),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(18),
-              borderSide: BorderSide.none,
-            ),
+        Container(
+          width: 10,
+          height: 10,
+          margin: const EdgeInsets.only(top: 5),
+          decoration: const BoxDecoration(
+            color: AppColors.brass,
+            shape: BoxShape.circle,
           ),
-          items: choices
-              .map(
-                (choice) => DropdownMenuItem<String>(
-                  value: choice,
-                  child: Text(choice),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: AppColors.ink,
                 ),
-              )
-              .toList(),
-          onChanged: onChanged,
-        ),
-      ],
-    );
-  }
-}
-
-class _SettingField extends StatelessWidget {
-  const _SettingField({
-    required this.label,
-    required this.controller,
-    required this.onSubmitted,
-    this.example,
-  });
-
-  final String label;
-  final TextEditingController controller;
-  final ValueChanged<String> onSubmitted;
-  final String? example;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        if (example != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            example!,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF5C7672)),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                detail,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: AppColors.mutedInk,
+                ),
+              ),
+            ],
           ),
-        ],
-        const SizedBox(height: 10),
-        TextField(
-          controller: controller,
-          onSubmitted: onSubmitted,
-          onChanged: onSubmitted,
-          decoration: InputDecoration(
-            hintText: example == null ? null : 'vi,en',
-            filled: true,
-            fillColor: const Color(0xFFF7FAF8),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(18),
-              borderSide: BorderSide.none,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ReadOnlyField extends StatelessWidget {
-  const _ReadOnlyField({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 10),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF7FAF8),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Text(value),
-        ),
-      ],
-    );
-  }
-}
-
-class _TranscriptBox extends StatelessWidget {
-  const _TranscriptBox({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 10),
-        Container(
-          width: double.infinity,
-          constraints: const BoxConstraints(minHeight: 92),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF7FAF8),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: SelectableText(value.isEmpty ? 'No transcript yet.' : value),
         ),
       ],
     );

@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voice Input Design Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --paper: #fcfaf6;
+        --canvas: #f3eee5;
+        --panel: rgba(255, 252, 246, 0.78);
+        --border: #e2d8c8;
+        --border-strong: #b4a897;
+        --ink: #20211e;
+        --muted: #6b6a63;
+        --primary: #c7772b;
+        --success: #2f6b59;
+        --info: #2f5d7c;
+        --warning: #b86a1f;
+        --error: #9b3e2c;
+        --shadow: 0 20px 60px rgba(32, 33, 30, 0.08);
+      }
+
+      body.dark {
+        --paper: #151816;
+        --canvas: #1d211d;
+        --panel: rgba(29, 33, 29, 0.85);
+        --border: #2d342f;
+        --border-strong: #435048;
+        --ink: #f6f0e8;
+        --muted: #b3b0a9;
+        --primary: #b36f31;
+        --success: #4e8e79;
+        --info: #5c87a3;
+        --warning: #cb8b46;
+        --error: #c77260;
+        --shadow: 0 24px 72px rgba(0, 0, 0, 0.35);
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Instrument Sans", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(199, 119, 43, 0.12), transparent 28%),
+          radial-gradient(circle at 90% 10%, rgba(47, 93, 124, 0.1), transparent 24%),
+          linear-gradient(180deg, var(--canvas), var(--paper));
+        min-height: 100vh;
+      }
+      .wrap {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 36px 0 64px;
+      }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .toggle {
+        border: 1px solid var(--border-strong);
+        background: var(--panel);
+        color: var(--ink);
+        border-radius: 999px;
+        padding: 10px 14px;
+        cursor: pointer;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+      .hero-card,
+      .mock,
+      .specimen,
+      .palette {
+        background: var(--panel);
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+      .hero-card {
+        border-radius: 28px;
+        padding: 32px;
+      }
+      h1 {
+        margin: 10px 0 14px;
+        font-family: "Fraunces", serif;
+        font-size: clamp(42px, 6vw, 72px);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+      }
+      .lede {
+        max-width: 42rem;
+        font-size: 18px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+      .chips {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 22px;
+      }
+      .chip {
+        border: 1px solid var(--border);
+        background: rgba(255,255,255,0.45);
+        padding: 9px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .status {
+        border-radius: 24px;
+        padding: 22px;
+        background: linear-gradient(180deg, rgba(47,107,89,0.12), rgba(47,107,89,0.08));
+        border: 1px solid rgba(47,107,89,0.24);
+        display: grid;
+        gap: 12px;
+      }
+      .status h3, .section-title, .mock h3, .specimen h3, .palette h3 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .status p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .keycap {
+        font-family: "IBM Plex Mono", monospace;
+        background: var(--paper);
+        border: 1px solid var(--border-strong);
+        border-bottom-width: 3px;
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-size: 13px;
+        display: inline-block;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 24px;
+      }
+      .mock, .specimen, .palette {
+        border-radius: 24px;
+        padding: 24px;
+      }
+      .window {
+        border-radius: 22px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        background: var(--paper);
+      }
+      .window-top {
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, rgba(255,255,255,0.45), transparent);
+      }
+      .window-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+      }
+      .window-title strong {
+        font-size: 15px;
+      }
+      .window-title span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .window-body {
+        padding: 22px;
+        display: grid;
+        gap: 16px;
+      }
+      .banner {
+        border-radius: 18px;
+        padding: 18px;
+        background: rgba(47,107,89,0.1);
+        border: 1px solid rgba(47,107,89,0.22);
+      }
+      .banner strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        background: rgba(255,255,255,0.55);
+      }
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      label {
+        display: grid;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      input, .select {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px 14px;
+        background: var(--paper);
+        color: var(--ink);
+        font: inherit;
+      }
+      .select::after { content: ""; }
+      .mono-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+      .mono-row:last-child { border-bottom: 0; }
+      .swatches {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .swatch {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        overflow: hidden;
+        background: var(--paper);
+      }
+      .swatch-color {
+        height: 78px;
+      }
+      .swatch-meta {
+        padding: 12px;
+        font-size: 13px;
+      }
+      .button-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        padding: 12px 16px;
+        border-radius: 14px;
+        border: 1px solid transparent;
+        font-weight: 600;
+      }
+      .btn.primary {
+        background: var(--primary);
+        color: #fff7ef;
+      }
+      .btn.secondary {
+        background: rgba(36,92,78,0.12);
+        color: var(--success);
+        border-color: rgba(36,92,78,0.18);
+      }
+      .btn.ghost {
+        background: transparent;
+        color: var(--ink);
+        border-color: var(--border);
+      }
+      .font-line {
+        padding: 16px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .font-line:last-child { border-bottom: 0; }
+      .fraunces { font-family: "Fraunces", serif; }
+      .instrument { font-family: "Instrument Sans", sans-serif; }
+      .plex { font-family: "IBM Plex Mono", monospace; }
+      .caption { color: var(--muted); font-size: 13px; }
+      @media (max-width: 900px) {
+        .hero, .grid, .form-grid, .swatches { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div>
+          <div class="eyebrow">Design Consultation Preview</div>
+          <strong>Voice Input / Warm Utility</strong>
+        </div>
+        <button class="toggle" id="themeToggle">Toggle Light/Dark</button>
+      </div>
+
+      <section class="hero">
+        <div class="hero-card">
+          <div class="eyebrow">A paid desktop tool, not a dashboard</div>
+          <h1>Hold a key, speak, and keep your flow.</h1>
+          <p class="lede">
+            This direction turns the product into a calm writing instrument:
+            warm surfaces, sharp hierarchy, precise mono accents, and a small
+            amount of personality where it counts.
+          </p>
+          <div class="chips">
+            <div class="chip">Warm paper surfaces</div>
+            <div class="chip">Brass action accent</div>
+            <div class="chip">Mono hotkey language</div>
+            <div class="chip">Minimal-functional motion</div>
+          </div>
+        </div>
+
+        <div class="hero-card status">
+          <div>
+            <h3>Ready to type</h3>
+            <p>The app should reassure first and explain second. Users should feel “it’s working” before they think “how is it built?”</p>
+          </div>
+          <div class="button-row">
+            <span class="keycap">F9 Original</span>
+            <span class="keycap">F10 Translate</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="mock">
+          <h3>Settings Window Mockup</h3>
+          <div class="caption">Main surface: simple, warm, trustworthy.</div>
+          <div class="window" style="margin-top: 16px;">
+            <div class="window-top">
+              <div class="window-title">
+                <div>
+                  <strong>Voice Input</strong>
+                  <span>Speak into the current app without breaking focus.</span>
+                </div>
+                <span class="keycap">Ready</span>
+              </div>
+            </div>
+            <div class="window-body">
+              <div class="banner">
+                <strong>Ready to type</strong>
+                <span class="caption">Hold a key, speak, and release to insert text into the active app.</span>
+              </div>
+              <div class="panel">
+                <div class="section-title">Shortcuts</div>
+                <div class="form-grid" style="margin-top: 14px;">
+                  <label>Original<input value="F9" /></label>
+                  <label>Translate<input value="F10" /></label>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="section-title">Voice & Language</div>
+                <div class="form-grid" style="margin-top: 14px;">
+                  <label>Spoken language<input value="vi,en" /></label>
+                  <label>Translate output<input value="en" /></label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="mock">
+          <h3>Advanced Surface Mockup</h3>
+          <div class="caption">Same system, more technical tone.</div>
+          <div class="window" style="margin-top: 16px;">
+            <div class="window-top">
+              <div class="window-title">
+                <div>
+                  <strong>Advanced</strong>
+                  <span>Diagnostics, reconnect, and transcript details.</span>
+                </div>
+                <button class="btn ghost">Reconnect</button>
+              </div>
+            </div>
+            <div class="window-body">
+              <div class="panel">
+                <div class="mono-row"><span>ws_state</span><span>ready</span></div>
+                <div class="mono-row"><span>last_keepalive</span><span>10s ago</span></div>
+                <div class="mono-row"><span>transport_ping</span><span>20s</span></div>
+                <div class="mono-row"><span>sample_rate</span><span>48000</span></div>
+              </div>
+              <div class="panel">
+                <div class="section-title">Session Transcript</div>
+                <p class="caption" style="margin-top:10px;">Original: "please summarize this code change"</p>
+                <p class="caption">Translation: "hãy tóm tắt thay đổi code này"</p>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="grid" style="margin-top: 24px;">
+        <article class="specimen">
+          <h3>Typography Specimen</h3>
+          <div class="font-line">
+            <div class="caption">Display / Brand Accent</div>
+            <div class="fraunces" style="font-size: 44px; line-height: 1;">Voice Input</div>
+          </div>
+          <div class="font-line">
+            <div class="caption">Body / UI</div>
+            <div class="instrument" style="font-size: 17px; line-height: 1.5;">
+              Hold a key, speak, and instantly type into the current text field.
+            </div>
+          </div>
+          <div class="font-line">
+            <div class="caption">Hotkeys / Diagnostics</div>
+            <div class="plex" style="font-size: 14px;">F9 original / F10 translate / ws ready / ping 20s</div>
+          </div>
+        </article>
+
+        <article class="palette">
+          <h3>Palette & Controls</h3>
+          <div class="swatches" style="margin-top: 16px;">
+            <div class="swatch"><div class="swatch-color" style="background:#c7772b;"></div><div class="swatch-meta">Brass<br>#C7772B</div></div>
+            <div class="swatch"><div class="swatch-color" style="background:#245c4e;"></div><div class="swatch-meta">Green<br>#245C4E</div></div>
+            <div class="swatch"><div class="swatch-color" style="background:#f3eee5;"></div><div class="swatch-meta">Canvas<br>#F3EEE5</div></div>
+            <div class="swatch"><div class="swatch-color" style="background:#20211e;"></div><div class="swatch-meta" style="color:white;background:#20211e;">Ink<br>#20211E</div></div>
+          </div>
+          <div class="button-row">
+            <button class="btn primary">Save Changes</button>
+            <button class="btn secondary">Reconnect</button>
+            <button class="btn ghost">Cancel</button>
+          </div>
+        </article>
+      </section>
+    </div>
+
+    <script>
+      const button = document.getElementById("themeToggle");
+      button.addEventListener("click", () => {
+        document.body.classList.toggle("dark");
+      });
+    </script>
+  </body>
+</html>
