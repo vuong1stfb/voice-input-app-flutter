@@ -768,7 +768,8 @@ class _SettingsPageState extends State<SettingsPage>
                       children: [
                         Expanded(
                           child: _SettingField(
-                            label: 'Source language hint',
+                            label: 'Source language hints',
+                            example: 'Examples: vi or vi,en',
                             controller: _sourceLanguageController,
                             onSubmitted: (value) async {
                               await _updateSettings(
@@ -1100,11 +1101,13 @@ class _SettingField extends StatelessWidget {
     required this.label,
     required this.controller,
     required this.onSubmitted,
+    this.example,
   });
 
   final String label;
   final TextEditingController controller;
   final ValueChanged<String> onSubmitted;
+  final String? example;
 
   @override
   Widget build(BuildContext context) {
@@ -1117,12 +1120,22 @@ class _SettingField extends StatelessWidget {
             context,
           ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
         ),
+        if (example != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            example!,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF5C7672)),
+          ),
+        ],
         const SizedBox(height: 10),
         TextField(
           controller: controller,
           onSubmitted: onSubmitted,
           onChanged: onSubmitted,
           decoration: InputDecoration(
+            hintText: example == null ? null : 'vi,en',
             filled: true,
             fillColor: const Color(0xFFF7FAF8),
             border: OutlineInputBorder(

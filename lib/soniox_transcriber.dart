@@ -53,6 +53,7 @@ class SonioxTranscriber {
   WebSocket? _websocket;
   Completer<TranscriptResult?>? _resultCompleter;
   Timer? _keepAliveTimer;
+  Timer? _reconnectTimer;
   final BytesBuilder _pcmBuffer = BytesBuilder(copy: false);
 
   TranscriptMode? _activeMode;
@@ -76,7 +77,10 @@ class SonioxTranscriber {
   bool _finalMarkerSeen = false;
   bool _isStopping = false;
   bool _isPreparing = false;
+  bool _isDisposed = false;
+  bool _closingSocket = false;
   bool _recorderReady = false;
+  SonioxSettings? _lastRequestedSettings;
   void Function({
     required String originalAccumulated,
     required String translationAccumulated,
@@ -96,6 +100,7 @@ class SonioxTranscriber {
     required SonioxSettings settings,
     required Future<void> Function(String status) onStatus,
   }) async {
+    _lastRequestedSettings = settings;
     await _ensureRecorderReady(onStatus);
     await _ensureLiveInputStream(settings, onStatus);
     await _ensurePreparedSession(
@@ -113,6 +118,7 @@ class SonioxTranscriber {
       throw StateError('A recording session is already active.');
     }
 
+    _lastRequestedSettings = settings;
     await _ensureRecorderReady(onStatus);
     await _ensureLiveInputStream(settings, onStatus);
     await _ensurePreparedSession(
@@ -163,9 +169,11 @@ class SonioxTranscriber {
   }
 
   Future<void> dispose() async {
+    _isDisposed = true;
     await _audioSubscription?.cancel();
     _audioSubscription = null;
     _stopKeepAlive();
+    _stopReconnect();
     await _recorder.dispose();
     await _closeSocket();
   }
@@ -328,6 +336,7 @@ class SonioxTranscriber {
     required SonioxSettings settings,
     required Future<void> Function(String status) onStatus,
   }) async {
+    _lastRequestedSettings = settings;
     if (_websocket != null &&
         _preparedSettings?.tokenEndpoint == settings.tokenEndpoint &&
         _preparedSettings?.websocketEndpoint == settings.websocketEndpoint &&
@@ -338,6 +347,7 @@ class SonioxTranscriber {
     }
 
     _isPreparing = true;
+    _stopReconnect();
     await _closeSocket();
 
     await onStatus('Fetching Soniox token...');
@@ -351,9 +361,13 @@ class SonioxTranscriber {
     socket.listen(
       _handleSocketMessage,
       onError: (Object error, StackTrace stackTrace) {
-        _completeIfPending(null);
+        unawaited(_appendLog('soniox:socket_error:$error'));
+        _handleSocketTerminalState();
+        _completeIfPending(_buildBestEffortResult());
       },
       onDone: () {
+        unawaited(_appendLog('soniox:socket_done'));
+        _handleSocketTerminalState();
         if (_resultCompleter != null &&
             !_resultCompleter!.isCompleted &&
             !_finalMarkerSeen) {
@@ -363,11 +377,12 @@ class SonioxTranscriber {
       cancelOnError: true,
     );
 
-    final languageHints = <String>[
-      if (settings.sourceLanguageHint.trim().isNotEmpty &&
-          settings.sourceLanguageHint.trim().toLowerCase() != 'auto')
-        settings.sourceLanguageHint.trim().toLowerCase(),
-    ];
+    final languageHints = settings.sourceLanguageHint
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .where((value) => value.isNotEmpty && value != 'auto')
+        .toSet()
+        .toList();
 
     final configMessage = {
       'api_key': token,
@@ -720,8 +735,51 @@ class SonioxTranscriber {
     _keepAliveTimer = null;
   }
 
+  void _scheduleReconnect() {
+    if (_isDisposed || _reconnectTimer != null || _isPreparing) {
+      return;
+    }
+    final settings = _lastRequestedSettings;
+    if (settings == null) {
+      return;
+    }
+    _reconnectTimer = Timer(const Duration(seconds: 2), () async {
+      _reconnectTimer = null;
+      if (_isDisposed || _websocket != null) {
+        return;
+      }
+      try {
+        await _appendLog('soniox:reconnect_attempt');
+        await _ensurePreparedSession(
+          settings: settings,
+          onStatus: (_) async {},
+        );
+      } catch (error) {
+        await _appendLog('soniox:reconnect_failed:$error');
+        _scheduleReconnect();
+      }
+    });
+  }
+
+  void _stopReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+  }
+
+  void _handleSocketTerminalState() {
+    if (_closingSocket) {
+      return;
+    }
+    _stopKeepAlive();
+    _websocket = null;
+    _preparedSettings = null;
+    _isPreparing = false;
+    _scheduleReconnect();
+  }
+
   Future<void> _closeSocket() async {
     _stopKeepAlive();
+    _stopReconnect();
     final socket = _websocket;
     _websocket = null;
     _preparedSettings = null;
@@ -729,6 +787,11 @@ class SonioxTranscriber {
     if (socket == null) {
       return;
     }
-    await socket.close();
+    _closingSocket = true;
+    try {
+      await socket.close();
+    } finally {
+      _closingSocket = false;
+    }
   }
 }
