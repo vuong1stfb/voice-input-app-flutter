@@ -41,7 +41,7 @@ class SonioxTranscriber {
   SonioxTranscriber();
 
   static const int _channels = 1;
-  static const int _timesliceMs = 2000;
+  static const int _timesliceMs = 500;
   static const int _finalizeSilenceMs = 200;
   static const Duration _segmentFinalTimeout = Duration(seconds: 5);
 
